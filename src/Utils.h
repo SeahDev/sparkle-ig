@@ -1,83 +1,179 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <QuickLook/QuickLook.h>
-#import <os/log.h>
 #import <objc/message.h>
-
-#import "../modules/JGProgressHUD/JGProgressHUD.h"
+#import <os/log.h>
 
 #import "InstagramHeaders.h"
-#import "QuickLook.h"
+#import "Shared/MediaPreview/SPKFullScreenMediaPlayer.h"
+#import "Shared/UI/SPKNotificationCenter.h"
 
-#import "Settings/SCISettingsViewController.h"
+#import "Settings/SPKSettingsViewController.h"
 
-#define SCILog(fmt, ...) \
-    do { \
-        NSString *tmpStr = [NSString stringWithFormat:(fmt), ##__VA_ARGS__]; \
-        os_log(OS_LOG_DEFAULT, "[SCInsta Test] %{public}s", tmpStr.UTF8String); \
-    } while(0)
+FOUNDATION_EXPORT void SPKLogMessage(NSString *category,
+                                     os_log_type_t type,
+                                     NSString *format, ...) NS_FORMAT_FUNCTION(3, 4);
 
-#define SCILogId(prefix, obj) os_log(OS_LOG_DEFAULT, "[SCInsta Test] %{public}@: %{public}@", prefix, obj);
+/// Master toggle for per-account preferences (global, default off).
+FOUNDATION_EXPORT NSString *const kSPKPrefPerAccountSettings;
 
-@interface SCIUtils : NSObject
+/// Maps a preference key to the key actually stored/read. When per-account mode
+/// is on and the key isn't forced-global, returns a `u_<accountPK>_<key>`
+/// namespaced key; otherwise returns `key` unchanged. Writers MUST route through
+/// this so reads and writes stay in sync.
+FOUNDATION_EXPORT NSString *SPKEffectivePreferenceKey(NSString *key);
 
+/// Namespaced NSUserDefaults access for code that reads/writes preferences
+/// directly (not via getBoolPref:/getStringPref:/...). Applies the same
+/// per-account → global inheritance as the accessors.
+FOUNDATION_EXPORT id SPKPreferenceObjectForKey(NSString *key);
+FOUNDATION_EXPORT void SPKPreferenceSetObject(id _Nullable value, NSString *key);
+
+/// Canonical "per-account mode is active" gate: the global toggle is on AND an
+/// account PK is resolved. Single source of truth for whether per-account scoping
+/// applies (export prompt, gallery/downloads filtering, etc.).
+FOUNDATION_EXPORT BOOL SPKPerAccountModeActive(void);
+
+/// YES when `key` is forced device-global (app icon, appearance, tab layout, ...) and
+/// therefore never stored per-account. Used to decide what a per-account export carries.
+FOUNDATION_EXPORT BOOL SPKPreferenceKeyIsGlobal(NSString *key);
+
+/// Resolves the Reels vertical-UFI class across IG versions. On IG <=435 the class
+/// was exposed to the ObjC runtime as plain `IGSundialViewerVerticalUFI`; on IG 436+
+/// it moved into a Swift module and is registered under the mangled name
+/// `_TtC26IGSundialViewerVerticalUFI26IGSundialViewerVerticalUFI`. Hook groups bind
+/// to the result via `%init(Group, IGSundialViewerVerticalUFI = SPKReelsVerticalUFIClass())`.
+FOUNDATION_EXPORT Class _Nullable SPKReelsVerticalUFIClass(void);
+
+/// Resolves an IG class whose ObjC runtime name changed between versions. Many
+/// classes that were plain ObjC on IG <=435 became Swift classes on IG 436+, so
+/// their runtime name is now the mangled `_TtC<len><Module><len><Class>` form and a
+/// bare `%hook`/`NSClassFromString(@"Bare")` resolves to nil. Pass the IG 436+
+/// Swift `@"Module.Class"` name as `qualified` and the legacy plain name as
+/// `legacy`; returns whichever the runtime currently has (or nil). Hook groups bind
+/// to it via `%init(Group, BareName = SPKResolveIGClass(@"Module.Class", @"BareName"))`.
+FOUNDATION_EXPORT Class _Nullable SPKResolveIGClass(NSString *qualified, NSString *_Nullable legacy);
+
+#define SPKLog(category, fmt, ...) SPKLogMessage((category), OS_LOG_TYPE_DEFAULT, (fmt), ##__VA_ARGS__)
+#define SPKWarnLog(category, fmt, ...) SPKLogMessage((category), OS_LOG_TYPE_ERROR, (fmt), ##__VA_ARGS__)
+#define SPKErrorLog(category, fmt, ...) SPKLogMessage((category), OS_LOG_TYPE_FAULT, (fmt), ##__VA_ARGS__)
+#define SPKLogId(category, obj) SPKLog((category), @"%@", (obj))
+
+/*
+ *  System Versioning Preprocessor Macros
+ */
+
+#define SYSTEM_VERSION_EQUAL_TO(v) ([[[UIDevice currentDevice] systemVersion] compare:v options:NSNumericSearch] == NSOrderedSame)
+#define SYSTEM_VERSION_GREATER_THAN(v) ([[[UIDevice currentDevice] systemVersion] compare:v options:NSNumericSearch] == NSOrderedDescending)
+#define SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(v) ([[[UIDevice currentDevice] systemVersion] compare:v options:NSNumericSearch] != NSOrderedAscending)
+#define SYSTEM_VERSION_LESS_THAN(v) ([[[UIDevice currentDevice] systemVersion] compare:v options:NSNumericSearch] == NSOrderedAscending)
+#define SYSTEM_VERSION_LESS_THAN_OR_EQUAL_TO(v) ([[[UIDevice currentDevice] systemVersion] compare:v options:NSNumericSearch] != NSOrderedDescending)
+
+@interface SPKUtils : NSObject
+
+// Preferences
 + (BOOL)getBoolPref:(NSString *)key;
 + (double)getDoublePref:(NSString *)key;
 + (NSString *)getStringPref:(NSString *)key;
 
-+ (_Bool)liquidGlassEnabledBool:(_Bool)fallback;
+// Misc
++ (BOOL)tabOrderSetTo:(NSString *)ordering;
++ (NSString *)IGVersionString;
+
+// Session / user
+// Active IG user session (walks connected scenes for the first window with a
+// non-nil `userSession`).
++ (nullable id)activeUserSession;
+// PK string read from an IGUser object's `_pk` ivar (walks the superclass chain).
++ (nullable NSString *)pkFromIGUser:(nullable id)user;
+// Current logged-in user's PK via the active session, or nil when unavailable.
++ (nullable NSString *)currentUserPK;
+
+/// IGDSLauncherConfig hooks: when Liquid Glass is on, returns YES; otherwise returns `fallback` (stock).
++ (_Bool)spk_liquidGlassLauncherPrefKey:(NSString *)key orig:(_Bool)fallback;
+
+/// True when Liquid Glass is enabled and runtime suppression is inactive.
++ (BOOL)spk_isLiquidGlassEffectivelyEnabled;
 
 + (void)cleanCache;
++ (unsigned long long)cleanCacheReturningFreedBytes;
++ (unsigned long long)cacheSizeBytes;
++ (NSString *)formattedCacheSize;
++ (NSString *)cacheAutoClearMode;
++ (BOOL)shouldAutomaticallyClearCacheNow;
++ (void)markCacheClearedNow;
++ (void)evaluateAutomaticCacheClearIfNeeded;
 
-// Displaying View Controllers
-+ (void)showQuickLookVC:(NSArray<id> *)items;
+// Display View Controllers
 + (void)showShareVC:(id)item;
 + (void)showSettingsVC:(UIWindow *)window;
++ (void)showSettingsForTopicTitle:(NSString *)title;
++ (void)presentViewControllerInSheet:(UIViewController *)vc;
 
 // Colours
-+ (UIColor *)SCIColor_Primary;
++ (UIColor *)SPKColor_InstagramBlue;
++ (UIColor *)SPKColor_InstagramBackground;
++ (UIColor *)SPKColor_InstagramSecondaryBackground;
++ (UIColor *)SPKColor_InstagramTertiaryBackground;
++ (UIColor *)SPKColor_InstagramGroupedBackground;
++ (UIColor *)SPKColor_InstagramPrimaryText;
++ (UIColor *)SPKColor_InstagramSecondaryText;
++ (UIColor *)SPKColor_InstagramTertiaryText;
++ (UIColor *)SPKColor_InstagramSeparator;
++ (UIColor *)SPKColor_InstagramFavorite;
++ (UIColor *)SPKColor_InstagramDestructive;
++ (UIColor *)SPKColor_InstagramPressedBackground;
++ (UIColor *)SPKColor_ListRowPressedOverlay;
++ (UIColor *)SPKColor_SettingsSwitchOnTintForTraitCollection:(UITraitCollection *)traitCollection;
++ (UIColor *)SPKColor_SettingsSwitchThumbTintForTraitCollection:(UITraitCollection *)traitCollection;
 
 // Errors
 + (NSError *)errorWithDescription:(NSString *)errorDesc;
 + (NSError *)errorWithDescription:(NSString *)errorDesc code:(NSInteger)errorCode;
-
-+ (JGProgressHUD *)showErrorHUDWithDescription:(NSString *)errorDesc;
-+ (JGProgressHUD *)showErrorHUDWithDescription:(NSString *)errorDesc dismissAfterDelay:(CGFloat)dismissDelay;
++ (BOOL)openURL:(NSURL *)url;
++ (void)dismissPresentedViewControllers;
++ (BOOL)openInstagramProfileForUsername:(NSString *)username;
++ (BOOL)openInstagramMediaURL:(NSURL *)url;
++ (BOOL)openPhotosApp;
++ (nullable NSURL *)sanitizedInstagramShareURL:(NSURL *)url;
++ (nullable NSString *)appendImgIndex:(NSInteger)imgIndex toURLString:(nullable NSString *)urlString;
++ (nullable NSString *)instagramShortcodeForMediaPK:(NSString *)mediaPK;
 
 // Media
 + (NSURL *)getPhotoUrl:(IGPhoto *)photo;
 + (NSURL *)getPhotoUrlForMedia:(IGMedia *)media;
++ (NSURL *)getBestProfilePictureURLForUser:(id)user;
 
 + (NSURL *)getVideoUrl:(IGVideo *)video;
 + (NSURL *)getVideoUrlForMedia:(IGMedia *)media;
 
-// View Controllers
+// View Controller Helpers
 + (UIViewController *)viewControllerForView:(UIView *)view;
 + (UIViewController *)viewControllerForAncestralView:(UIView *)view;
 + (UIViewController *)nearestViewControllerForView:(UIView *)view;
 
-// Functions
-+ (NSString *)IGVersionString;
-+ (BOOL)isNotch;
-
-+ (BOOL)existingLongPressGestureRecognizerForView:(UIView *)view;
-
 // Alerts
-+ (BOOL)showConfirmation:(void(^)(void))okHandler title:(NSString *)title;
-+ (BOOL)showConfirmation:(void(^)(void))okHandler cancelHandler:(void(^)(void))cancelHandler title:(NSString *)title;
-+ (BOOL)showConfirmation:(void(^)(void))okHandler;
-+ (BOOL)showConfirmation:(void(^)(void))okHandler cancelHandler:(void(^)(void))cancelHandler;
++ (BOOL)showConfirmation:(void (^)(void))okHandler title:(NSString *)title;
++ (BOOL)showConfirmation:(void (^)(void))okHandler title:(NSString *)title message:(NSString *)message;
++ (BOOL)showConfirmation:(void (^)(void))okHandler cancelHandler:(void (^)(void))cancelHandler title:(NSString *)title;
++ (BOOL)showConfirmation:(void (^)(void))okHandler cancelHandler:(void (^)(void))cancelHandler title:(NSString *)title message:(NSString *)message;
++ (BOOL)showConfirmation:(void (^)(void))okHandler;
++ (BOOL)showConfirmation:(void (^)(void))okHandler cancelHandler:(void (^)(void))cancelHandler;
 + (void)showRestartConfirmation;
-
-// Toasts
-+ (void)showToastForDuration:(double)duration title:(NSString *)title;
-+ (void)showToastForDuration:(double)duration title:(NSString *)title subtitle:(NSString *)subtitle;
 
 // Math
 + (NSUInteger)decimalPlacesInDouble:(double)value;
 
+// Dynamic selector helpers
++ (nullable NSNumber *)numericValueForObj:(id)obj selectorName:(NSString *)selectorName;
+
 // Ivars
 + (id)getIvarForObj:(id)obj name:(const char *)name;
 + (void)setIvarForObj:(id)obj name:(const char *)name value:(id)value;
+
+// Language-independent view/control matching. Prefer these over accessibilityLabel
+// (which is localized) when identifying IG controls: an icon asset name and a
+// control's tap target-action selector are both code symbols, stable across locales.
++ (nullable NSString *)igImageNameForImage:(nullable UIImage *)image;
++ (BOOL)control:(nullable UIControl *)control hasTapActionContaining:(NSString *)needle;
 
 @end

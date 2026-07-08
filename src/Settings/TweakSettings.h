@@ -1,16 +1,14 @@
-#import <Foundation/Foundation.h>
-#import "SCISetting.h"
-#import "SCISymbol.h"
-#import "../Utils.h"
 #import "../Tweak.h"
+#import "../Utils.h"
+#import "SPKSetting.h"
+#import <Foundation/Foundation.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
-@interface SCITweakSettings : NSObject
+@interface SPKTweakSettings : NSObject
 
 + (NSArray *)sections;
 + (NSString *)title;
-+ (NSDictionary *)menus;
 
 @end
 

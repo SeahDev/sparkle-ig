@@ -1,4 +1,4 @@
-name: Build SCInsta tweak for Rootless
+name: Build Sparkle tweak for Rootless
 
 on:
     push:
@@ -12,7 +12,7 @@ concurrency:
     cancel-in-progress: true
 jobs:
     build:
-        name: Build SCInsta Rootless
+        name: Build Sparkle Rootless
         runs-on: macos-latest
         permissions:
             contents: write
@@ -25,7 +25,7 @@ jobs:
                 submodules: recursive
 
             - name: Install Dependencies
-              run: brew install ldid dpkg make
+              run: brew install ldid dpkg make autoconf automake cmake libtool meson nasm ninja pkgconf wget yasm
 
             - name: Set PATH environment variable
               run: echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH 
@@ -34,7 +34,11 @@ jobs:
               uses: actions/checkout@v4
               with:
                 repository: theos/theos
-                ref: master
+                # Pinned to a known-good commit. theos master tracks the latest
+                # Logos, and commit 777925d (#114) regressed bare %orig parsing
+                # (single-line `{ %orig; }`, `%orig]`, etc.). This commit references
+                # Logos a623700, the last version that builds this project.
+                ref: 405e5c6ddb288615c030eeaedc6b265aae748285
                 path: ${{ github.workspace }}/theos
                 submodules: recursive
         
@@ -59,15 +63,30 @@ jobs:
               env:
                 THEOS: ${{ github.workspace }}/theos
 
-            - name: Get SCInsta Version
-              id: scinsta_version
+            - name: Get Sparkle Version
+              id: sparkle_version
               run: |
-                SCINSTA_VERSION=$(awk '/Version:/ {print $2}' main/control)
+                SPARKLE_VERSION=$(awk '/Version:/ {print $2}' main/control)
 
-                echo "SCINSTA_VERSION=${SCINSTA_VERSION}" >> "$GITHUB_ENV"
-                echo "version=${SCINSTA_VERSION}" >> "$GITHUB_OUTPUT"
+                echo "SPARKLE_VERSION=${SPARKLE_VERSION}" >> "$GITHUB_ENV"
+                echo "version=${SPARKLE_VERSION}" >> "$GITHUB_OUTPUT"
+
+            - name: Cache FFmpeg frameworks
+              id: ffmpeg_cache
+              uses: actions/cache@v4
+              with:
+                path: |
+                  main/modules/ffmpegkit
+                  main/.cache/ffmpegkit
+                key: ffmpegkit-${{ runner.os }}-${{ hashFiles('main/fetch-ffmpegkit.sh') }}
+
+            - name: Prepare FFmpeg frameworks
+              run: |
+                cd main
+                chmod +x ./fetch-ffmpegkit.sh
+                ./fetch-ffmpegkit.sh
             
-            - name: Build SCInsta tweak for Rootless
+            - name: Build Sparkle tweak for Rootless
               run: |                
                 cd main
                 ls -la
@@ -78,15 +97,12 @@ jobs:
               env:
                 THEOS: ${{ github.workspace }}/theos
 
-            - name: Rename deb to include version info
-              run: |
-                cd main/packages
-                mv "$(ls -t | head -n1)" "com.socuul.scinsta_${SCINSTA_VERSION}+debug-rootless.deb"
-
             - name: Pass package name to upload action
               id: package_name
               run: |
-                echo "package=$(ls -t main/packages | head -n1)" >> "$GITHUB_OUTPUT"
+                # build.sh already names the deb Sparkle_v<version>_rootless.deb
+                DEB_FILE="$(basename "$(ls -t main/packages/Sparkle_v*_rootless.deb | head -n1)")"
+                echo "package=${DEB_FILE}" >> "$GITHUB_OUTPUT"
 
             - name: Upload Artifact
               uses: actions/upload-artifact@v4

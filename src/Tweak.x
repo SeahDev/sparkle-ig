@@ -1,115 +1,226 @@
-#import <substrate.h>
+#import "App/SPKFlexLoader.h"
 #import "InstagramHeaders.h"
+#import "Shared/ActionButton/ActionButtonCore.h"
 #import "Tweak.h"
 #import "Utils.h"
+#import <objc/message.h>
+#import <objc/runtime.h>
+#import <substrate.h>
 
 ///////////////////////////////////////////////////////////
 
 // Screenshot handlers
 
-#define VOID_HANDLESCREENSHOT(orig) [SCIUtils getBoolPref:@"remove_screenshot_alert"] ? nil : orig;
+#define VOID_HANDLESCREENSHOT(orig) [SPKUtils getBoolPref:@"msgs_disable_screenshot_detection"] ? nil : orig;
 #define NONVOID_HANDLESCREENSHOT(orig) return VOID_HANDLESCREENSHOT(orig)
 
 ///////////////////////////////////////////////////////////
 
 // * Tweak version *
-NSString *SCIVersionString = @"v1.1.1";
+NSString *SPKVersionString = @"v1.0.0";
 
 // Variables that work across features
-BOOL dmVisualMsgsViewedButtonEnabled = false;
+__weak id SPKPendingDirectVisualMessageToMarkSeen = nil;
+NSString *SPKForcedStorySeenMediaPK = nil;
+BOOL SPKForceMarkStoryAsSeen = NO;
+BOOL SPKForceStoryAutoAdvance = NO;
 
-// Tweak first-time setup
-%hook IGInstagramAppDelegate
-- (_Bool)application:(UIApplication *)application willFinishLaunchingWithOptions:(id)arg2 {
-    // Default SCInsta config
-    NSDictionary *sciDefaults = @{
-        @"hide_ads": @(YES),
-        @"copy_description": @(YES),
-        @"detailed_color_picker": @(YES),
-        @"remove_screenshot_alert": @(YES),
-        @"call_confirm": @(YES),
-        @"keep_deleted_message": @(YES),
-        @"dw_feed_posts": @(YES),
-        @"dw_reels": @(YES),
-        @"dw_story": @(YES),
-        @"save_profile": @(YES),
-        @"dw_finger_count": @(3),
-        @"dw_finger_duration": @(0.5),
-        @"reels_tap_control": @"default",
-        @"nav_icon_ordering": @"default",
-        @"swipe_nav_tabs": @"default",
-        @"enable_notes_customization": @(YES),
-        @"custom_note_themes": @(YES),
-        @"disable_auto_unmuting_reels": @(YES),
-        @"doom_scrolling_reel_count": @(1)
-    };
-    [[NSUserDefaults standardUserDefaults] registerDefaults:sciDefaults];
-    
-    // Override instagram defaults
-    if ([SCIUtils getBoolPref:@"liquid_glass_buttons"]) {
-        [[NSUserDefaults standardUserDefaults] setValue:@(YES) forKey:@"instagram.override.project.lucent.navigation"];
+static NSString *SPKIdentifierStringFromValue(id value) {
+    if (!value || value == (id)kCFNull)
+        return nil;
+    if ([value isKindOfClass:[NSString class]]) {
+        NSString *string = (NSString *)value;
+        return string.length > 0 ? string : nil;
     }
-    else {
-        [[NSUserDefaults standardUserDefaults] setValue:@(NO) forKey:@"instagram.override.project.lucent.navigation"];
+    if ([value respondsToSelector:@selector(stringValue)]) {
+        NSString *string = [value stringValue];
+        return string.length > 0 ? string : nil;
     }
-
-    return %orig;
+    return nil;
 }
-- (_Bool)application:(UIApplication *)application didFinishLaunchingWithOptions:(id)arg2 {
-    %orig;
 
-    // Open settings for first-time users
-    double openDelay = [SCIUtils getBoolPref:@"tweak_settings_app_launch"] ? 0.0 : 5.0;
+static id SPKValueForSelectorOrKey(id object, NSString *name) {
+    if (!object || name.length == 0)
+        return nil;
 
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(openDelay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (
-            ![[[NSUserDefaults standardUserDefaults] objectForKey:@"SCInstaFirstRun"] isEqualToString:SCIVersionString]
-            || [SCIUtils getBoolPref:@"tweak_settings_app_launch"]
-        ) {
-            NSLog(@"[SCInsta] First run, initializing");
+    SEL selector = NSSelectorFromString(name);
+    if ([object respondsToSelector:selector]) {
+        return ((id (*)(id, SEL))objc_msgSend)(object, selector);
+    }
 
-            // Display settings modal on screen
-            NSLog(@"[SCInsta] Displaying SCInsta first-time settings modal");
-            [SCIUtils showSettingsVC:[self window]];
+    @try {
+        return [object valueForKey:name];
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static BOOL SPKObjectIsKindOfClassNamed(id object, NSString *className) {
+    if (!object || className.length == 0)
+        return NO;
+    Class cls = NSClassFromString(className);
+    if (cls && [object isKindOfClass:cls])
+        return YES;
+
+    // IG 436+ : several of these view models became Swift classes whose runtime
+    // name is mangled (_TtC<len><Module><len><Class>) or dotted (Module.Class), so
+    // NSClassFromString(bareName) returns nil. Walk the class chain and compare the
+    // simple (last dotted component) name, with a mangled-suffix backstop.
+    for (Class c = [object class]; c; c = class_getSuperclass(c)) {
+        NSString *name = NSStringFromClass(c);
+        if (name.length == 0)
+            continue;
+        if ([name isEqualToString:className])
+            return YES;
+        NSString *simple = [[name componentsSeparatedByString:@"."] lastObject];
+        if ([simple isEqualToString:className])
+            return YES;
+        // Mangled form ".._TtC..NN<ClassName>" ends with the digit-length-prefixed name.
+        NSString *mangledSuffix = [NSString stringWithFormat:@"%lu%@", (unsigned long)className.length, className];
+        if ([name hasSuffix:mangledSuffix])
+            return YES;
+    }
+    return NO;
+}
+
+static NSArray *SPKFilterDirectInboxObjects(NSArray *originalObjs) {
+    if (![originalObjs isKindOfClass:[NSArray class]])
+        return originalObjs;
+
+    NSMutableArray *filteredObjs = [NSMutableArray arrayWithCapacity:[originalObjs count]];
+
+    for (id obj in originalObjs) {
+        BOOL shouldHide = NO;
+
+        // Section header
+        if (SPKObjectIsKindOfClassNamed(obj, @"IGDirectInboxHeaderCellViewModel")) {
+            NSString *title = SPKValueForSelectorOrKey(obj, @"title");
+
+            // "Suggestions" header
+            if ([title isEqualToString:@"Suggestions"]) {
+                if ([SPKUtils getBoolPref:@"general_hide_suggested_users_msgs"]) {
+                    SPKLog(@"General", @"[Sparkle] Hiding suggested chats (header: messages tab)");
+                    shouldHide = YES;
+                }
+            }
+
+            // "Accounts to follow/message" header
+            else if ([title hasPrefix:@"Accounts to"]) {
+                if ([SPKUtils getBoolPref:@"general_hide_suggested_users_msgs"]) {
+                    SPKLog(@"General", @"[Sparkle] Hiding suggested users: (header: inbox view)");
+                    shouldHide = YES;
+                }
+            }
         }
-    });
 
-    NSLog(@"[SCInsta] Cleaning cache...");
-    [SCIUtils cleanCache];
+        // Suggested recipients
+        else if (SPKObjectIsKindOfClassNamed(obj, @"IGDirectInboxSuggestedThreadCellViewModel")) {
+            if ([SPKUtils getBoolPref:@"general_hide_suggested_users_msgs"]) {
+                SPKLog(@"General", @"[Sparkle] Hiding suggested chats (recipients: channels tab)");
+                shouldHide = YES;
+            }
+        }
 
-    if ([SCIUtils getBoolPref:@"flex_app_launch"]) {
-        [[objc_getClass("FLEXManager") sharedManager] showExplorer];
+        // "Accounts to follow" recipients
+        else if (SPKObjectIsKindOfClassNamed(obj, @"IGDiscoverPeopleItemConfiguration") ||
+                 SPKObjectIsKindOfClassNamed(obj, @"IGDiscoverPeopleConnectionItemConfiguration")) {
+            if ([SPKUtils getBoolPref:@"general_hide_suggested_users_msgs"]) {
+                SPKLog(@"General", @"[Sparkle] Hiding suggested chats: (recipients: inbox view)");
+                shouldHide = YES;
+            }
+        }
+
+        // Hide notes tray
+        else if (SPKObjectIsKindOfClassNamed(obj, @"IGDirectNotesTrayRowViewModel")) {
+            if ([SPKUtils getBoolPref:@"msgs_hide_notes_tray"]) {
+                SPKLog(@"General", @"[Sparkle] Hiding notes tray");
+                shouldHide = YES;
+            }
+        }
+
+        if (!shouldHide) {
+            [filteredObjs addObject:obj];
+        }
     }
 
-    return true;
+    return [filteredObjs copy];
 }
 
-- (void)applicationDidBecomeActive:(id)arg1 {
-    %orig;
-    
-    if ([SCIUtils getBoolPref:@"flex_app_start"]) {
-        [[objc_getClass("FLEXManager") sharedManager] showExplorer];
+static NSString *SPKStoryMediaIdentifierFromObject(id object, NSInteger depth) {
+    if (!object || depth > 3)
+        return nil;
+
+    for (NSString *name in @[ @"pk", @"mediaPK", @"mediaPk", @"mediaID", @"mediaId", @"id", @"itemID", @"itemId" ]) {
+        NSString *identifier = SPKIdentifierStringFromValue(SPKValueForSelectorOrKey(object, name));
+        if (identifier.length > 0)
+            return identifier;
     }
+
+    for (NSString *name in @[ @"media", @"mediaItem", @"storyItem", @"item", @"model" ]) {
+        id nested = SPKValueForSelectorOrKey(object, name);
+        if (nested && nested != object) {
+            NSString *identifier = SPKStoryMediaIdentifierFromObject(nested, depth + 1);
+            if (identifier.length > 0)
+                return identifier;
+        }
+    }
+
+    return nil;
 }
-%end
+
+NSString *SPKStoryMediaIdentifier(id media) {
+    return SPKStoryMediaIdentifierFromObject(media, 0);
+}
+
+static void SPKShowPendingRepostFeedbackIfNeeded(SPKActionButtonSource source) {
+    NSDictionary<NSString *, NSString *> *feedback = SPKConsumePendingRepostFeedback(source);
+    if (!feedback)
+        return;
+    NSString *iconResource = feedback[@"iconResource"] ?: @"ig_icon_reshare_outline_24";
+    SPKNotify(kSPKNotificationRepost, feedback[@"title"] ?: @"Tapped repost button", nil, iconResource, SPKNotificationToneForIconResource(iconResource));
+}
+
+@interface _UISheetDetent : NSObject
++ (instancetype)_mediumDetent;
++ (instancetype)_largeDetent;
+@end
+
+@interface _UISheetPresentationController : NSObject
+@property (nonatomic, assign, setter=_setPresentsAtStandardHalfHeight:) BOOL _presentsAtStandardHalfHeight;
+@property (nonatomic, copy, setter=_setDetents:) NSArray *_detents;
+@property (nonatomic, assign, setter=_setIndexOfCurrentDetent:) NSInteger _indexOfCurrentDetent;
+@property (nonatomic, assign, setter=_setPrefersScrollingExpandsToLargerDetentWhenScrolledToEdge:) BOOL _prefersScrollingExpandsToLargerDetentWhenScrolledToEdge;
+@property (nonatomic, assign, setter=_setIndexOfLastUndimmedDetent:) NSInteger _indexOfLastUndimmedDetent;
+@end
+
+static const void *kSPKFlexThreeFingerGestureKey = &kSPKFlexThreeFingerGestureKey;
+
+// MARK: Liquid glass
+
+%group SPKTweakLaunchCriticalHooks
 
 %hook IGDSLauncherConfig
 - (_Bool)isLiquidGlassInAppNotificationEnabled {
-    return [SCIUtils liquidGlassEnabledBool:%orig];
+    return [SPKUtils spk_liquidGlassLauncherPrefKey:@"interface_liquid_glass" orig:%orig];
 }
-- (_Bool)isLiquidGlassContextMenuEnabled{
-    return [SCIUtils liquidGlassEnabledBool:%orig];
+- (_Bool)isLiquidGlassContextMenuEnabled {
+    return [SPKUtils spk_liquidGlassLauncherPrefKey:@"interface_liquid_glass" orig:%orig];
 }
 - (_Bool)isLiquidGlassToastEnabled {
-    return [SCIUtils liquidGlassEnabledBool:%orig];
+    return [SPKUtils spk_liquidGlassLauncherPrefKey:@"interface_liquid_glass" orig:%orig];
 }
 - (_Bool)isLiquidGlassToastPeekEnabled {
-    return [SCIUtils liquidGlassEnabledBool:%orig];
+    return [SPKUtils spk_liquidGlassLauncherPrefKey:@"interface_liquid_glass" orig:%orig];
 }
 - (_Bool)isLiquidGlassAlertDialogEnabled {
-    return [SCIUtils liquidGlassEnabledBool:%orig];
+    return [SPKUtils spk_liquidGlassLauncherPrefKey:@"interface_liquid_glass" orig:%orig];
+}
+- (_Bool)isLiquidGlassIconBarButtonEnabled {
+    return [SPKUtils spk_liquidGlassLauncherPrefKey:@"interface_liquid_glass" orig:%orig];
 }
 %end
+
+// MARK: Bug reports
 
 // Disable sending modded insta bug reports
 %hook IGWindow
@@ -120,38 +231,51 @@ BOOL dmVisualMsgsViewedButtonEnabled = false;
 
 %hook IGBugReportUploader
 - (id)initWithNetworker:(id)arg1
-         pandoGraphQLService:(id)arg2
-             analyticsLogger:(id)arg3
-                userDefaults:(id)arg4
-         launcherSetProvider:(id)arg5
-shouldPersistLastBugReportId:(id)arg6
-{
+             pandoGraphQLService:(id)arg2
+                 analyticsLogger:(id)arg3
+                    userDefaults:(id)arg4
+             launcherSetProvider:(id)arg5
+    shouldPersistLastBugReportId:(id)arg6 {
     return nil;
 }
 %end
 
+%end
+
+// MARK: Screenshots
+
+%group SPKTweakPrivacyHooks
+
 // Disable anti-screenshot feature on visual messages
 %hook IGStoryViewerContainerView
-- (void)setShouldBlockScreenshot:(BOOL)arg1 viewModel:(id)arg2 { VOID_HANDLESCREENSHOT(%orig); }
+- (void)setShouldBlockScreenshot:(BOOL)arg1 viewModel:(id)arg2 {
+    VOID_HANDLESCREENSHOT(%orig);
+}
 %end
 
 // Disable screenshot logging/detection
 %hook IGDirectVisualMessageViewerSession
-- (id)visualMessageViewerController:(id)arg1 didDetectScreenshotForVisualMessage:(id)arg2 atIndex:(NSInteger)arg3 { NONVOID_HANDLESCREENSHOT(%orig); }
+- (id)visualMessageViewerController:(id)arg1 didDetectScreenshotForVisualMessage:(id)arg2 atIndex:(NSInteger)arg3 {
+    NONVOID_HANDLESCREENSHOT(%orig);
+}
 %end
 
 %hook IGDirectVisualMessageReplayService
-- (id)visualMessageViewerController:(id)arg1 didDetectScreenshotForVisualMessage:(id)arg2 atIndex:(NSInteger)arg3 { NONVOID_HANDLESCREENSHOT(%orig); }
+- (id)visualMessageViewerController:(id)arg1 didDetectScreenshotForVisualMessage:(id)arg2 atIndex:(NSInteger)arg3 {
+    NONVOID_HANDLESCREENSHOT(%orig);
+}
 %end
 
 %hook IGDirectVisualMessageReportService
-- (id)visualMessageViewerController:(id)arg1 didDetectScreenshotForVisualMessage:(id)arg2 atIndex:(NSInteger)arg3 { NONVOID_HANDLESCREENSHOT(%orig); }
+- (id)visualMessageViewerController:(id)arg1 didDetectScreenshotForVisualMessage:(id)arg2 atIndex:(NSInteger)arg3 {
+    NONVOID_HANDLESCREENSHOT(%orig);
+}
 %end
 
 %hook IGDirectVisualMessageScreenshotSafetyLogger
 - (id)initWithUserSession:(id)arg1 entryPoint:(NSInteger)arg2 {
-    if ([SCIUtils getBoolPref:@"remove_screenshot_alert"]) {
-        NSLog(@"[SCInsta] Disable visual message screenshot safety logger");
+    if ([SPKUtils getBoolPref:@"msgs_disable_screenshot_detection"]) {
+        SPKLog(@"General", @"[Sparkle] Disable visual message screenshot safety logger");
         return nil;
     }
 
@@ -160,39 +284,94 @@ shouldPersistLastBugReportId:(id)arg6
 %end
 
 %hook IGScreenshotObserver
-- (id)initForController:(id)arg1 { NONVOID_HANDLESCREENSHOT(%orig); }
+- (id)initForController:(id)arg1 {
+    NONVOID_HANDLESCREENSHOT(%orig);
+}
 %end
 
 %hook IGScreenshotObserverDelegate
-- (void)screenshotObserverDidSeeScreenshotTaken:(id)arg1 { VOID_HANDLESCREENSHOT(%orig); }
-- (void)screenshotObserverDidSeeActiveScreenCapture:(id)arg1 event:(NSInteger)arg2 { VOID_HANDLESCREENSHOT(%orig); }
+- (void)screenshotObserverDidSeeScreenshotTaken:(id)arg1 {
+    VOID_HANDLESCREENSHOT(%orig);
+}
+- (void)screenshotObserverDidSeeActiveScreenCapture:(id)arg1 event:(NSInteger)arg2 {
+    VOID_HANDLESCREENSHOT(%orig);
+}
 %end
 
 %hook IGDirectMediaViewerViewController
-- (void)screenshotObserverDidSeeScreenshotTaken:(id)arg1 { VOID_HANDLESCREENSHOT(%orig); }
-- (void)screenshotObserverDidSeeActiveScreenCapture:(id)arg1 event:(NSInteger)arg2 { VOID_HANDLESCREENSHOT(%orig); }
+- (void)screenshotObserverDidSeeScreenshotTaken:(id)arg1 {
+    VOID_HANDLESCREENSHOT(%orig);
+}
+- (void)screenshotObserverDidSeeActiveScreenCapture:(id)arg1 event:(NSInteger)arg2 {
+    VOID_HANDLESCREENSHOT(%orig);
+}
 %end
 
 %hook IGStoryViewerViewController
-- (void)screenshotObserverDidSeeScreenshotTaken:(id)arg1 { VOID_HANDLESCREENSHOT(%orig); }
-- (void)screenshotObserverDidSeeActiveScreenCapture:(id)arg1 event:(NSInteger)arg2 { VOID_HANDLESCREENSHOT(%orig); }
+- (void)screenshotObserverDidSeeScreenshotTaken:(id)arg1 {
+    VOID_HANDLESCREENSHOT(%orig);
+}
+- (void)screenshotObserverDidSeeActiveScreenCapture:(id)arg1 event:(NSInteger)arg2 {
+    VOID_HANDLESCREENSHOT(%orig);
+}
 %end
 
 %hook IGSundialFeedViewController
-- (void)screenshotObserverDidSeeScreenshotTaken:(id)arg1 { VOID_HANDLESCREENSHOT(%orig); }
-- (void)screenshotObserverDidSeeActiveScreenCapture:(id)arg1 event:(NSInteger)arg2 { VOID_HANDLESCREENSHOT(%orig); }
+- (void)screenshotObserverDidSeeScreenshotTaken:(id)arg1 {
+    VOID_HANDLESCREENSHOT(%orig);
+}
+- (void)screenshotObserverDidSeeActiveScreenCapture:(id)arg1 event:(NSInteger)arg2 {
+    VOID_HANDLESCREENSHOT(%orig);
+}
 %end
 
 %hook IGDirectVisualMessageViewerController
-- (void)screenshotObserverDidSeeScreenshotTaken:(id)arg1 { VOID_HANDLESCREENSHOT(%orig); }
-- (void)screenshotObserverDidSeeActiveScreenCapture:(id)arg1 event:(NSInteger)arg2 { VOID_HANDLESCREENSHOT(%orig); }
+- (void)screenshotObserverDidSeeScreenshotTaken:(id)arg1 {
+    VOID_HANDLESCREENSHOT(%orig);
+}
+- (void)screenshotObserverDidSeeActiveScreenCapture:(id)arg1 event:(NSInteger)arg2 {
+    VOID_HANDLESCREENSHOT(%orig);
+}
+%end
+
 %end
 
 /////////////////////////////////////////////////////////////////////////////
 
-// Hide items
+// MARK: Hide items
 
 // Direct suggested chats (in search bar)
+BOOL showSearchSectionLabelForTag(NSInteger tag) {
+    if (
+        (tag == 18 && [SPKUtils getBoolPref:@"general_hide_meta_ai_msgs"])           // AI
+        || (tag == 20 && [SPKUtils getBoolPref:@"general_hide_meta_ai_msgs"])        // Ask Meta AI
+        || (tag == 2 && [SPKUtils getBoolPref:@"general_hide_suggested_users_msgs"]) // More suggestions
+        || (tag == 13 && [SPKUtils getBoolPref:@"msgs_hide_suggested_chats"])        // Suggested channels
+    ) {
+        return false;
+    }
+
+    return true;
+}
+
+%group SPKTweakMessagesHooks
+
+%hook IGDirectInboxSearchSectionPartitioningComponent
+- (id)initWithSectionTitle:(id)arg1
+               maxRecipients:(NSInteger)maxRecipients
+                 filterBlock:(id)arg3
+                  comparator:(id)arg4
+            expandedSections:(id)arg5
+                        type:(NSInteger)arg6
+    recipientListSectionType:(NSInteger)tag {
+    if (showSearchSectionLabelForTag(tag)) {
+        return %orig(arg1, maxRecipients, arg3, arg4, arg5, arg6, tag);
+    } else {
+        return %orig(arg1, 0, arg3, arg4, arg5, arg6, tag);
+    }
+}
+%end
+
 %hook IGDirectInboxSearchListAdapterDataSource
 - (id)objectsForListAdapter:(id)arg1 {
     NSArray *originalObjs = %orig();
@@ -201,47 +380,22 @@ shouldPersistLastBugReportId:(id)arg6
     for (id obj in originalObjs) {
         BOOL shouldHide = NO;
 
-        // Section header 
+        // Section headers
         if ([obj isKindOfClass:%c(IGLabelItemViewModel)]) {
 
-            // Broadcast channels
-            if ([[obj valueForKey:@"uniqueIdentifier"] isEqualToString:@"channels"]) {
-                if ([SCIUtils getBoolPref:@"no_suggested_chats"]) {
-                    NSLog(@"[SCInsta] Hiding suggested chats (header)");
-
-                    shouldHide = YES;
-                }
+            NSNumber *tag = [obj valueForKey:@"tag"];
+            if (tag && !showSearchSectionLabelForTag([tag intValue])) {
+                shouldHide = YES;
             }
 
-            // Ask Meta AI
-            else if ([[obj valueForKey:@"labelTitle"] isEqualToString:@"Ask Meta AI"]) {
-                if ([SCIUtils getBoolPref:@"hide_meta_ai"]) {
-                    NSLog(@"[SCInsta] Hiding meta ai suggested chats (header)");
-
-                    shouldHide = YES;
-                }
-            }
-
-            // AI
-            else if ([[obj valueForKey:@"labelTitle"] isEqualToString:@"AI"]) {
-                if ([SCIUtils getBoolPref:@"hide_meta_ai"]) {
-                    NSLog(@"[SCInsta] Hiding ai suggested chats (header)");
-
-                    shouldHide = YES;
-                }
-            }
-            
         }
 
         // AI agents section
         else if (
-            [obj isKindOfClass:%c(IGDirectInboxSearchAIAgentsPillsSectionViewModel)]
-         || [obj isKindOfClass:%c(IGDirectInboxSearchAIAgentsSuggestedPromptViewModel)]
-         || [obj isKindOfClass:%c(IGDirectInboxSearchAIAgentsSuggestedPromptLoggingViewModel)]
-        ) {
+            [obj isKindOfClass:%c(IGDirectInboxSearchAIAgentsPillsSectionViewModel)] || [obj isKindOfClass:%c(IGDirectInboxSearchAIAgentsSuggestedPromptViewModel)] || [obj isKindOfClass:%c(IGDirectInboxSearchAIAgentsSuggestedPromptLoggingViewModel)]) {
 
-            if ([SCIUtils getBoolPref:@"hide_meta_ai"]) {
-                NSLog(@"[SCInsta] Hiding suggested chats (ai agents)");
+            if ([SPKUtils getBoolPref:@"general_hide_meta_ai_msgs"]) {
+                SPKLog(@"General", @"[Sparkle] Hiding suggested chats (ai agents)");
 
                 shouldHide = YES;
             }
@@ -253,17 +407,17 @@ shouldPersistLastBugReportId:(id)arg6
 
             // Broadcast channels
             if ([[obj recipient] isBroadcastChannel]) {
-                if ([SCIUtils getBoolPref:@"no_suggested_chats"]) {
-                    NSLog(@"[SCInsta] Hiding suggested chats (broadcast channels recipient)");
+                if ([SPKUtils getBoolPref:@"msgs_hide_suggested_chats"]) {
+                    SPKLog(@"General", @"[Sparkle] Hiding suggested chats (broadcast channels recipient)");
 
                     shouldHide = YES;
                 }
             }
-            
+
             // Meta AI (special section types)
             else if (([obj sectionType] == 20) || [obj sectionType] == 18) {
-                if ([SCIUtils getBoolPref:@"hide_meta_ai"]) {
-                    NSLog(@"[SCInsta] Hiding meta ai suggested chats (meta ai recipient)");
+                if ([SPKUtils getBoolPref:@"general_hide_meta_ai_msgs"]) {
+                    SPKLog(@"General", @"[Sparkle] Hiding meta ai suggested chats (meta ai recipient)");
 
                     shouldHide = YES;
                 }
@@ -271,8 +425,8 @@ shouldPersistLastBugReportId:(id)arg6
 
             // Meta AI (catch-all)
             else if ([[[obj recipient] threadName] isEqualToString:@"Meta AI"]) {
-                if ([SCIUtils getBoolPref:@"hide_meta_ai"]) {
-                    NSLog(@"[SCInsta] Hiding meta ai suggested chats (meta ai recipient)");
+                if ([SPKUtils getBoolPref:@"general_hide_meta_ai_msgs"]) {
+                    SPKLog(@"General", @"[Sparkle] Hiding meta ai suggested chats (meta ai recipient)");
 
                     shouldHide = YES;
                 }
@@ -283,7 +437,6 @@ shouldPersistLastBugReportId:(id)arg6
         if (!shouldHide) {
             [filteredObjs addObject:obj];
         }
-
     }
 
     return [filteredObjs copy];
@@ -300,13 +453,13 @@ shouldPersistLastBugReportId:(id)arg6
         BOOL shouldHide = NO;
 
         // Meta AI suggested user in direct new message view
-        if ([SCIUtils getBoolPref:@"hide_meta_ai"]) {
-            
+        if ([SPKUtils getBoolPref:@"general_hide_meta_ai_msgs"]) {
+
             if ([obj isKindOfClass:%c(IGDirectCreateChatCellViewModel)]) {
 
                 // "AI Chats"
                 if ([[obj valueForKey:@"title"] isEqualToString:@"AI chats"]) {
-                    NSLog(@"[SCInsta] Hiding meta ai: direct thread creation ai chats section");
+                    SPKLog(@"General", @"[Sparkle] Hiding meta ai: direct thread creation ai chats section");
 
                     shouldHide = YES;
                 }
@@ -317,19 +470,17 @@ shouldPersistLastBugReportId:(id)arg6
 
                 // Meta AI suggested user
                 if ([[[obj recipient] threadName] isEqualToString:@"Meta AI"]) {
-                    NSLog(@"[SCInsta] Hiding meta ai: direct thread creation ai suggestion");
+                    SPKLog(@"General", @"[Sparkle] Hiding meta ai: direct thread creation ai suggestion");
 
                     shouldHide = YES;
                 }
-
             }
-            
         }
 
         // Invite friends to insta contacts upsell
-        if ([SCIUtils getBoolPref:@"no_suggested_users"]) {
+        if ([SPKUtils getBoolPref:@"general_hide_suggested_users_msgs"]) {
             if ([obj isKindOfClass:%c(IGContactInvitesSearchUpsellViewModel)]) {
-                NSLog(@"[SCInsta] Hiding suggested users: invite contacts upsell");
+                SPKLog(@"General", @"[Sparkle] Hiding suggested users: invite contacts upsell");
 
                 shouldHide = YES;
             }
@@ -348,72 +499,20 @@ shouldPersistLastBugReportId:(id)arg6
 // Direct suggested chats (inbox view)
 %hook IGDirectInboxListAdapterDataSource
 - (id)objectsForListAdapter:(id)arg1 {
-    NSArray *originalObjs = %orig();
-    NSMutableArray *filteredObjs = [NSMutableArray arrayWithCapacity:[originalObjs count]];
-
-    for (id obj in originalObjs) {
-        BOOL shouldHide = NO;
-
-        // Section header
-        if ([obj isKindOfClass:%c(IGDirectInboxHeaderCellViewModel)]) {
-            
-            // "Suggestions" header
-            if ([[obj title] isEqualToString:@"Suggestions"]) {
-                if ([SCIUtils getBoolPref:@"no_suggested_users"]) {
-                    NSLog(@"[SCInsta] Hiding suggested chats (header: messages tab)");
-
-                    shouldHide = YES;
-                }
-            }
-
-            // "Accounts to follow/message" header
-            else if ([[obj title] hasPrefix:@"Accounts to"]) {
-                if ([SCIUtils getBoolPref:@"no_suggested_users"]) {
-                    NSLog(@"[SCInsta] Hiding suggested users: (header: inbox view)");
-
-                    shouldHide = YES;
-                }
-            }
-
-        }
-
-        // Suggested recipients
-        else if ([obj isKindOfClass:%c(IGDirectInboxSuggestedThreadCellViewModel)]) {
-            if ([SCIUtils getBoolPref:@"no_suggested_users"]) {
-                NSLog(@"[SCInsta] Hiding suggested chats (recipients: channels tab)");
-
-                shouldHide = YES;
-            }
-        }
-
-        // "Accounts to follow" recipients
-        else if ([obj isKindOfClass:%c(IGDiscoverPeopleItemConfiguration)] || [obj isKindOfClass:%c(IGDiscoverPeopleConnectionItemConfiguration)]) {
-            if ([SCIUtils getBoolPref:@"no_suggested_users"]) {
-                NSLog(@"[SCInsta] Hiding suggested chats: (recipients: inbox view)");
-
-                shouldHide = YES;
-            }
-        }
-
-        // Hide notes tray
-        else if ([obj isKindOfClass:%c(IGDirectNotesTrayRowViewModel)]) {
-            if ([SCIUtils getBoolPref:@"hide_notes_tray"]) {
-                NSLog(@"[SCInsta] Hiding notes tray");
-
-                shouldHide = YES;
-            }
-        }
-
-        // Populate new objs array
-        if (!shouldHide) {
-            [filteredObjs addObject:obj];
-        }
-
-    }
-
-    return [filteredObjs copy];
+    return SPKFilterDirectInboxObjects(%orig());
 }
 %end
+
+// Direct suggested chats (inbox view, latest Swift data source)
+%hook _TtC34IGDirectInboxListAdapterDataSource34IGDirectInboxListAdapterDataSource
+- (id)objectsForListAdapter:(id)arg1 {
+    return SPKFilterDirectInboxObjects(%orig());
+}
+%end
+
+%end
+
+%group SPKTweakGeneralUIHooks
 
 // Explore page results
 %hook IGSearchListKitDataSource
@@ -425,9 +524,9 @@ shouldPersistLastBugReportId:(id)arg6
         BOOL shouldHide = NO;
 
         // Meta AI
-        if ([SCIUtils getBoolPref:@"hide_meta_ai"]) {
+        if ([SPKUtils getBoolPref:@"general_hide_meta_ai_explore"]) {
 
-            // Section header 
+            // Section header
             if ([obj isKindOfClass:%c(IGLabelItemViewModel)]) {
 
                 // "Ask Meta AI" search results header
@@ -448,31 +547,29 @@ shouldPersistLastBugReportId:(id)arg6
             }
 
             // Meta AI suggested search results
-            else if ([obj isKindOfClass:%c(IGSearchResultViewModel)]) {
+            else if ([obj isKindOfClass:SPKResolveIGClass(@"IGSearchViewModels.IGSearchResultViewModel", @"IGSearchResultViewModel")]) {
 
                 // itemType 6 is meta ai suggestions
                 if ([obj itemType] == 6) {
-                    if ([SCIUtils getBoolPref:@"hide_meta_ai"]) {
+                    if ([SPKUtils getBoolPref:@"general_hide_meta_ai_explore"]) {
                         shouldHide = YES;
                     }
-                    
+
                 }
 
                 // Meta AI user account in search results
                 else if ([[[obj title] string] isEqualToString:@"meta.ai"]) {
-                    if ([SCIUtils getBoolPref:@"hide_meta_ai"]) {
+                    if ([SPKUtils getBoolPref:@"general_hide_meta_ai_explore"]) {
                         shouldHide = YES;
                     }
                 }
-
             }
-            
         }
 
         // No suggested users
-        if ([SCIUtils getBoolPref:@"no_suggested_users"]) {
+        if ([SPKUtils getBoolPref:@"general_hide_suggested_users_search"]) {
 
-            // Section header 
+            // Section header
             if ([obj isKindOfClass:%c(IGLabelItemViewModel)]) {
 
                 // "Suggested for you" search results header
@@ -491,19 +588,21 @@ shouldPersistLastBugReportId:(id)arg6
             else if ([obj isKindOfClass:%c(IGSeeAllItemConfiguration)] && ((IGSeeAllItemConfiguration *)obj).destination == 4) {
                 shouldHide = YES;
             }
-
         }
 
         // Populate new objs array
         if (!shouldHide) {
             [filteredObjs addObject:obj];
         }
-
     }
 
     return [filteredObjs copy];
 }
 %end
+
+%end
+
+%group SPKTweakFeedHooks
 
 // Story tray
 %hook IGMainStoryTrayDataSource
@@ -514,24 +613,23 @@ shouldPersistLastBugReportId:(id)arg6
     for (IGStoryTrayViewModel *obj in originalObjs) {
         BOOL shouldHide = NO;
 
-        if ([SCIUtils getBoolPref:@"no_suggested_users"]) {
+        if ([SPKUtils getBoolPref:@"general_hide_suggested_users_feed"]) {
             if ([obj isKindOfClass:%c(IGStoryTrayViewModel)]) {
                 NSNumber *type = [((IGStoryTrayViewModel *)obj) valueForKey:@"type"];
-                
+
                 // 8/9 looks to be the types for recommended stories
                 if ([type isEqual:@(8)] || [type isEqual:@(9)]) {
-                    NSLog(@"[SCInsta] Hiding suggested users: story tray");
+                    SPKLog(@"General", @"[Sparkle] Hiding suggested users: story tray");
 
                     shouldHide = YES;
-
                 }
             }
         }
 
-        if ([SCIUtils getBoolPref:@"hide_ads"]) {
+        if ([SPKUtils getBoolPref:@"general_hide_ads_feed"]) {
             // "New!" account id is 3538572169
             if ([obj isKindOfClass:%c(IGStoryTrayViewModel)] && (obj.isUnseenNux == YES || [obj.pk isEqualToString:@"3538572169"])) {
-                NSLog(@"[SCInsta] Removing ads: story tray");
+                SPKLog(@"General", @"[Sparkle] Removing ads: story tray");
 
                 shouldHide = YES;
             }
@@ -550,11 +648,16 @@ shouldPersistLastBugReportId:(id)arg6
 // Story tray expanded footer (Suggested accounts to follow)
 %hook IGStoryTraySectionController
 - (void)storyTrayControllerShowSUPOGEducationBump {
-    if ([SCIUtils getBoolPref:@"no_suggested_users"]) return;
+    if ([SPKUtils getBoolPref:@"general_hide_suggested_users_feed"])
+        return;
 
     return %orig();
 }
 %end
+
+%end
+
+%group SPKTweakGeneralMenuHooks
 
 // Modern IGDS app menus
 %hook IGDSMenu
@@ -566,150 +669,398 @@ shouldPersistLastBugReportId:(id)arg6
 
         // Meta AI
         if (
-            [[obj valueForKey:@"title"] isEqualToString:@"AI images"]
-            || [[obj valueForKey:@"title"] isEqualToString:@"Meta AI"]
-        ) {
-            
-            if ([SCIUtils getBoolPref:@"hide_meta_ai"]) {
-                NSLog(@"[SCInsta] Hiding meta ai from IGDS menu");
+            [[obj valueForKey:@"title"] isEqualToString:@"AI images"] || [[obj valueForKey:@"title"] isEqualToString:@"Meta AI"]) {
+
+            if ([SPKUtils getBoolPref:@"general_hide_meta_ai_global"]) {
+                SPKLog(@"General", @"[Sparkle] Hiding meta ai from IGDS menu");
 
                 shouldHide = YES;
             }
-
         }
 
         // Populate new objs array
         if (!shouldHide) {
             [filteredObjs addObject:obj];
         }
-
     }
 
     return %orig([filteredObjs copy], edr, headerLabelText);
 }
 %end
 
+%end
+
 /////////////////////////////////////////////////////////////////////////////
 
-// Confirm buttons
+// MARK: Confirm buttons
+
+%group SPKTweakFeedConfirmHooks
 
 %hook IGFeedItemUFICell
 - (void)UFIButtonBarDidTapOnLike:(id)arg1 {
-    if ([SCIUtils getBoolPref:@"like_confirm"]) {
-        NSLog(@"[SCInsta] Confirm post like triggered");
-
-        [SCIUtils showConfirmation:^(void) { %orig; }];
-    }
-    else {
-        return %orig;
-    }  
+    %orig;
 }
 
 - (void)UFIButtonBarDidTapOnRepost:(id)arg1 {
-    if ([SCIUtils getBoolPref:@"repost_confirm"]) {
-        NSLog(@"[SCInsta] Confirm repost triggered");
+    if ([SPKUtils getBoolPref:@"feed_confirm_repost"]) {
+        SPKLog(@"General", @"[Sparkle] Confirm repost triggered");
 
-        [SCIUtils showConfirmation:^(void) { %orig; }];
-    }
-    else {
-        return %orig;
+        [SPKUtils
+            showConfirmation:^(void) {
+                %orig;
+                SPKShowPendingRepostFeedbackIfNeeded(SPKActionButtonSourceFeed);
+            }
+            cancelHandler:^{
+                SPKConsumePendingRepostFeedback(SPKActionButtonSourceFeed);
+            }
+            title:@"Confirm Repost"
+            message:@"Are you sure you want to repost this post?"];
+    } else {
+        %orig;
+        SPKShowPendingRepostFeedbackIfNeeded(SPKActionButtonSourceFeed);
+        return;
     }
 }
 
 - (void)UFIButtonBarDidLongPressOnRepost:(id)arg1 {
-    if ([SCIUtils getBoolPref:@"repost_confirm"]) {
-        NSLog(@"[SCInsta] Confirm repost triggered (long press ignored)");
-    }
-    else {
+    if ([SPKUtils getBoolPref:@"feed_confirm_repost"]) {
+        SPKLog(@"General", @"[Sparkle] Confirm repost triggered (long press ignored)");
+    } else {
         return %orig;
     }
 }
 - (void)UFIButtonBarDidLongPressOnRepost:(id)arg1 withGestureRecognizer:(id)arg2 {
-    if ([SCIUtils getBoolPref:@"repost_confirm"]) {
-        NSLog(@"[SCInsta] Confirm repost triggered (long press ignored)");
-    }
-    else {
+    if ([SPKUtils getBoolPref:@"feed_confirm_repost"]) {
+        SPKLog(@"General", @"[Sparkle] Confirm repost triggered (long press ignored)");
+    } else {
         return %orig;
     }
 }
 %end
 
-%hook IGSundialViewerVerticalUFI
-- (void)_didTapLikeButton:(id)arg1 {
-    if ([SCIUtils getBoolPref:@"like_confirm_reels"]) {
-        NSLog(@"[SCInsta] Confirm reels like triggered");
+%end
 
-        [SCIUtils showConfirmation:^(void) { %orig; }];
-    }
-    else {
-        return %orig;
+%group SPKTweakReelsConfirmHooks
+
+%hook IGSundialViewerVerticalUFI
+// IG 436+ variant: handler renamed to `didTapRepostButton` (no underscore, no arg).
+- (void)didTapRepostButton {
+    if ([SPKUtils getBoolPref:@"reels_confirm_repost"]) {
+        SPKLog(@"General", @"[Sparkle] Confirm repost triggered");
+
+        [SPKUtils
+            showConfirmation:^(void) {
+                %orig;
+                SPKShowPendingRepostFeedbackIfNeeded(SPKActionButtonSourceReels);
+            }
+            cancelHandler:^{
+                SPKConsumePendingRepostFeedback(SPKActionButtonSourceReels);
+            }
+            title:@"Confirm Reel Repost"
+            message:@"Are you sure you want to repost this reel?"];
+    } else {
+        %orig;
+        SPKShowPendingRepostFeedbackIfNeeded(SPKActionButtonSourceReels);
+        return;
     }
 }
 
-- (void)_didLongPressLikeButton:(id)arg1 {
-    if ([SCIUtils getBoolPref:@"like_confirm_reels"]) {
-        NSLog(@"[SCInsta] Confirm repost triggered (long press ignored)");
-    }
-    else {
-        return %orig;
+- (void)_didTapRepostButton {
+    if ([SPKUtils getBoolPref:@"reels_confirm_repost"]) {
+        SPKLog(@"General", @"[Sparkle] Confirm repost triggered");
+
+        [SPKUtils
+            showConfirmation:^(void) {
+                %orig;
+                SPKShowPendingRepostFeedbackIfNeeded(SPKActionButtonSourceReels);
+            }
+            cancelHandler:^{
+                SPKConsumePendingRepostFeedback(SPKActionButtonSourceReels);
+            }
+            title:@"Confirm Reel Repost"
+            message:@"Are you sure you want to repost this reel?"];
+    } else {
+        %orig;
+        SPKShowPendingRepostFeedbackIfNeeded(SPKActionButtonSourceReels);
+        return;
     }
 }
 
 - (void)_didTapRepostButton:(id)arg1 {
-    if ([SCIUtils getBoolPref:@"repost_confirm"]) {
-        NSLog(@"[SCInsta] Confirm repost triggered");
+    if ([SPKUtils getBoolPref:@"reels_confirm_repost"]) {
+        SPKLog(@"General", @"[Sparkle] Confirm repost triggered");
 
-        [SCIUtils showConfirmation:^(void) { %orig; }];
-    }
-    else {
-        return %orig;
+        [SPKUtils
+            showConfirmation:^(void) {
+                %orig;
+                SPKShowPendingRepostFeedbackIfNeeded(SPKActionButtonSourceReels);
+            }
+            cancelHandler:^{
+                SPKConsumePendingRepostFeedback(SPKActionButtonSourceReels);
+            }
+            title:@"Confirm Reel Repost"
+            message:@"Are you sure you want to repost this reel?"];
+    } else {
+        %orig;
+        SPKShowPendingRepostFeedbackIfNeeded(SPKActionButtonSourceReels);
+        return;
     }
 }
 
 - (void)_didLongPressRepostButton:(id)arg1 {
-    if ([SCIUtils getBoolPref:@"repost_confirm"]) {
-        NSLog(@"[SCInsta] Confirm repost triggered (long press ignored)");
+    if ([SPKUtils getBoolPref:@"reels_confirm_repost"]) {
+        SPKLog(@"General", @"[Sparkle] Confirm repost triggered (long press ignored)");
+    } else {
+        return %orig;
     }
-    else {
+}
+
+// IG 436+ renamed this handler to drop the leading underscore.
+- (void)didLongPressRepostButton:(id)arg1 {
+    if ([SPKUtils getBoolPref:@"reels_confirm_repost"]) {
+        SPKLog(@"General", @"[Sparkle] Confirm repost triggered (long press ignored)");
+    } else {
         return %orig;
     }
 }
 %end
 
+%end
+
 /////////////////////////////////////////////////////////////////////////////
 
-// FLEX explorer gesture handler
-%hook IGRootViewController
-- (void)viewDidLoad {
-    %orig;
-    
-    // Recognize 5-finger long press
-    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
-    longPress.minimumPressDuration = 1;
-    longPress.numberOfTouchesRequired = 5;
-    [self.view addGestureRecognizer:longPress];
-}
-%new - (void)handleLongPress:(UILongPressGestureRecognizer *)sender {
-    if (sender.state != UIGestureRecognizerStateBegan) return;
+%group SPKTweakFlexEarlyCompatibilityHooks
 
-    if ([SCIUtils getBoolPref:@"flex_instagram"]) {
-        [[objc_getClass("FLEXManager") sharedManager] showExplorer];
+%hook UIWindow
+- (BOOL)_shouldCreateContextAsSecure {
+    Class flexWindowClass = SPKFlexWindowClass();
+    if (flexWindowClass && [self isKindOfClass:flexWindowClass]) {
+        return YES;
     }
+    return %orig;
+}
+
+- (void)becomeKeyWindow {
+    %orig;
+
+    if (objc_getAssociatedObject(self, kSPKFlexThreeFingerGestureKey)) {
+        return;
+    }
+
+    Class flexWindowClass = SPKFlexWindowClass();
+    if (flexWindowClass && [self isKindOfClass:flexWindowClass]) {
+        return;
+    }
+
+    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(spk_handleFlexGesture:)];
+    longPress.minimumPressDuration = 1.0;
+    longPress.numberOfTouchesRequired = 3;
+    longPress.cancelsTouchesInView = NO;
+    longPress.delaysTouchesBegan = NO;
+    longPress.delaysTouchesEnded = NO;
+    [self addGestureRecognizer:longPress];
+    objc_setAssociatedObject(self, kSPKFlexThreeFingerGestureKey, longPress, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+%new - (void)spk_handleFlexGesture:(UILongPressGestureRecognizer *)sender {
+if (sender.state != UIGestureRecognizerStateBegan)
+    return;
+
+if ([SPKUtils getBoolPref:@"tools_flex_instagram"]) {
+    SPKFlexShowExplorer(@"three_finger");
+}
 }
 %end
 
+%hook _UISheetPresentationController
+- (id)initWithPresentedViewController:(id)present presentingViewController:(id)presenter {
+    self = %orig;
+    if ([present isKindOfClass:%c(FLEXNavigationController)]) {
+        if ([self respondsToSelector:@selector(_setPresentsAtStandardHalfHeight:)]) {
+            self._presentsAtStandardHalfHeight = YES;
+        } else {
+            self._detents = @[ [%c(_UISheetDetent) _mediumDetent], [%c(_UISheetDetent) _largeDetent] ];
+        }
+        self._indexOfCurrentDetent = 1;
+        self._prefersScrollingExpandsToLargerDetentWhenScrolledToEdge = NO;
+        self._indexOfLastUndimmedDetent = 1;
+    }
+
+    return self;
+}
+%end
+
+%end
+
+%group SPKTweakFlexLoadedCompatibilityHooks
+
+%hook FLEXExplorerViewController
+- (BOOL)_canShowWhileLocked {
+    return YES;
+}
+%end
+
+%end
+
 // Disable safe mode (defaults reset upon subsequent crashes)
+%group SPKTweakSafeModeHooks
+
 %hook IGSafeModeChecker
 - (id)initWithInstacrashCounterProvider:(void *)provider crashThreshold:(unsigned long long)threshold {
-    if ([SCIUtils getBoolPref:@"disable_safe_mode"]) return nil;
+    if ([SPKUtils getBoolPref:@"tools_disable_safe_mode"])
+        return nil;
 
     return %orig(provider, threshold);
 }
 - (unsigned long long)crashCount {
-    if ([SCIUtils getBoolPref:@"disable_safe_mode"]) {
+    if ([SPKUtils getBoolPref:@"tools_disable_safe_mode"]) {
         return 0;
     }
 
     return %orig;
 }
 %end
+
+%end
+
+static BOOL SPKPrefEnabled(NSString *key) {
+    return [SPKUtils getBoolPref:key];
+}
+
+static BOOL SPKAnyPrefEnabled(NSArray<NSString *> *keys) {
+    for (NSString *key in keys) {
+        if (SPKPrefEnabled(key)) {
+            return YES;
+        }
+    }
+
+    return NO;
+}
+
+static void SPKInstallTweakPrivacyHooksIfNeeded(void) {
+    if (!SPKPrefEnabled(@"msgs_disable_screenshot_detection")) {
+        return;
+    }
+
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        %init(SPKTweakPrivacyHooks,
+                       IGDirectVisualMessageViewerSession = SPKResolveIGClass(@"IGDirectVisualMessageViewerSession.IGDirectVisualMessageViewerSession", @"IGDirectVisualMessageViewerSession"),
+                       IGDirectVisualMessageReplayService = SPKResolveIGClass(@"IGDirectVisualMessageServiceKit.IGDirectVisualMessageReplayService", @"IGDirectVisualMessageReplayService"),
+                       IGDirectMediaViewerViewController = SPKResolveIGClass(@"IGDirectMediaViewerKitSwift.IGDirectMediaViewerViewController", @"IGDirectMediaViewerViewController"));
+    });
+}
+
+static void SPKInstallTweakFlexSupportHooksIfNeeded(void) {
+    if (!SPKFlexIsBundled()) {
+        return;
+    }
+
+    static dispatch_once_t flexEarlyOnceToken;
+    dispatch_once(&flexEarlyOnceToken, ^{
+        %init(SPKTweakFlexEarlyCompatibilityHooks);
+    });
+}
+
+void SPKInstallFlexLoadedCompatibilityHooksIfNeeded(void) {
+    static dispatch_once_t flexLoadedOnceToken;
+    dispatch_once(&flexLoadedOnceToken, ^{
+        %init(SPKTweakFlexLoadedCompatibilityHooks);
+    });
+}
+
+void SPKInstallTweakLaunchCriticalHooks(void) {
+    static dispatch_once_t launchOnceToken;
+    dispatch_once(&launchOnceToken, ^{
+        %init(SPKTweakLaunchCriticalHooks);
+    });
+
+    static dispatch_once_t safeModeOnceToken;
+    dispatch_once(&safeModeOnceToken, ^{
+        %init(SPKTweakSafeModeHooks);
+    });
+
+    SPKInstallTweakFlexSupportHooksIfNeeded();
+}
+
+void SPKInstallTweakFeedHooksIfNeeded(void) {
+    if (SPKAnyPrefEnabled(@[
+            @"general_hide_ads_feed",
+            @"general_hide_suggested_users_feed"
+        ])) {
+        static dispatch_once_t feedOnceToken;
+        dispatch_once(&feedOnceToken, ^{
+            %init(SPKTweakFeedHooks,
+                           IGMainStoryTrayDataSource = SPKResolveIGClass(@"IGMainStoryTrayDataSource.IGMainStoryTrayDataSource", @"IGMainStoryTrayDataSource"));
+        });
+    }
+
+    if (SPKAnyPrefEnabled(@[
+            @"feed_confirm_repost"
+        ])) {
+        static dispatch_once_t confirmOnceToken;
+        dispatch_once(&confirmOnceToken, ^{
+            %init(SPKTweakFeedConfirmHooks);
+        });
+    }
+}
+
+void SPKInstallTweakStoryHooksIfNeeded(void) {
+    SPKInstallTweakPrivacyHooksIfNeeded();
+    SPKInstallTweakFeedHooksIfNeeded();
+}
+
+void SPKInstallTweakReelsHooksIfNeeded(void) {
+    SPKInstallTweakPrivacyHooksIfNeeded();
+
+    if (!SPKAnyPrefEnabled(@[
+            @"reels_confirm_repost"
+        ])) {
+        return;
+    }
+
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        %init(SPKTweakReelsConfirmHooks, IGSundialViewerVerticalUFI = SPKReelsVerticalUFIClass());
+    });
+}
+
+void SPKInstallTweakMessagesHooksIfNeeded(void) {
+    SPKInstallTweakPrivacyHooksIfNeeded();
+
+    if (!SPKAnyPrefEnabled(@[
+            @"general_hide_meta_ai_msgs",
+            @"general_hide_suggested_users_msgs",
+            @"msgs_hide_suggested_chats",
+            @"msgs_hide_notes_tray"
+        ])) {
+        return;
+    }
+
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        %init(SPKTweakMessagesHooks);
+    });
+}
+
+void SPKInstallTweakGeneralUIHooksIfNeeded(void) {
+    if (SPKAnyPrefEnabled(@[
+            @"general_hide_meta_ai_explore",
+            @"general_hide_suggested_users_search"
+        ])) {
+        static dispatch_once_t generalOnceToken;
+        dispatch_once(&generalOnceToken, ^{
+            %init(SPKTweakGeneralUIHooks,
+                           IGSearchListKitDataSource = SPKResolveIGClass(@"IGGenericSearch.IGSearchListKitDataSource", @"IGSearchListKitDataSource"));
+        });
+    }
+
+    if (SPKPrefEnabled(@"general_hide_meta_ai_global")) {
+        static dispatch_once_t menuOnceToken;
+        dispatch_once(&menuOnceToken, ^{
+            %init(SPKTweakGeneralMenuHooks);
+        });
+    }
+
+    SPKInstallTweakFlexSupportHooksIfNeeded();
+}

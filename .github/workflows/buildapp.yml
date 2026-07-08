@@ -3,7 +3,7 @@
 # https://github.com/ISnackable/YTCubePlus/blob/main/.github/workflows/Build.yml
 # https://github.com/BandarHL/BHTwitter/actions/workflows/build.yml
 
-name: Build and Package SCInsta
+name: Build and Package Sparkle
 
 on:
     workflow_dispatch:
@@ -18,13 +18,28 @@ on:
                 default: true
                 required: false
                 type: boolean
+            with_flex:
+                description: "Include libflex"
+                default: false
+                required: false
+                type: boolean
+            for_sidestore:
+                description: "Build for SideStore (Strips Extensions)"
+                default: false
+                required: false
+                type: boolean
+            bundle_id:
+                description: "Bundle ID"
+                default: ""
+                required: false
+                type: string
   
 concurrency:
     group: ${{ github.workflow }}-${{ github.ref }}
     cancel-in-progress: true
 jobs:
     build:
-        name: Build SCInsta
+        name: Build Sparkle
         runs-on: macos-latest
         permissions:
             contents: write
@@ -37,7 +52,7 @@ jobs:
                 submodules: recursive
 
             - name: Install Dependencies
-              run: brew install ldid dpkg make
+              run: brew install ldid dpkg make autoconf automake cmake libtool meson nasm ninja pkgconf wget yasm
 
             - name: Set PATH environment variable
               run: echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH 
@@ -46,7 +61,11 @@ jobs:
               uses: actions/checkout@v4
               with:
                 repository: theos/theos
-                ref: master
+                # Pinned to a known-good commit. theos master tracks the latest
+                # Logos, and commit 777925d (#114) regressed bare %orig parsing
+                # (single-line `{ %orig; }`, `%orig]`, etc.). This commit references
+                # Logos a623700, the last version that builds this project.
+                ref: 405e5c6ddb288615c030eeaedc6b265aae748285
                 path: ${{ github.workspace }}/theos
                 submodules: recursive
         
@@ -84,15 +103,30 @@ jobs:
                 THEOS: ${{ github.workspace }}/theos
                 Instagram_URL: ${{ inputs.decrypted_instagram_url }}
 
-            - name: Get SCInsta Version
-              id: scinsta_version
+            - name: Get Sparkle Version
+              id: sparkle_version
               run: |
-                SCINSTA_VERSION=$(awk '/Version:/ {print $2}' main/control)
+                SPARKLE_VERSION=$(awk '/Version:/ {print $2}' main/control)
 
-                echo "SCINSTA_VERSION=${SCINSTA_VERSION}" >> "$GITHUB_ENV"
-                echo "version=${SCINSTA_VERSION}" >> "$GITHUB_OUTPUT"
+                echo "SPARKLE_VERSION=${SPARKLE_VERSION}" >> "$GITHUB_ENV"
+                echo "version=${SPARKLE_VERSION}" >> "$GITHUB_OUTPUT"
+
+            - name: Cache FFmpeg frameworks
+              id: ffmpeg_cache
+              uses: actions/cache@v4
+              with:
+                path: |
+                  main/modules/ffmpegkit
+                  main/.cache/ffmpegkit
+                key: ffmpegkit-${{ runner.os }}-${{ hashFiles('main/fetch-ffmpegkit.sh') }}
+
+            - name: Prepare FFmpeg frameworks
+              run: |
+                cd main
+                chmod +x ./fetch-ffmpegkit.sh
+                ./fetch-ffmpegkit.sh
             
-            - name: Build SCInsta tweak for sideloading (as IPA)
+            - name: Build Sparkle tweak for sideloading (as IPA)
               run: |
                 pip install --force-reinstall https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
                 
@@ -102,35 +136,43 @@ jobs:
                 export PATH=.:$PATH
                 ls -la
 
-                ./build.sh sideload
+                FLAGS="--release"
+                if [ "${{ inputs.for_sidestore }}" = "true" ]; then
+                  FLAGS="--sidestore"
+                fi
+                if [ "${{ inputs.with_flex }}" = "true" ]; then
+                  FLAGS="$FLAGS --flex"
+                fi
+                if [ -n "${{ inputs.bundle_id }}" ]; then
+                  FLAGS="$FLAGS --bundle-id ${{ inputs.bundle_id }}"
+                fi
+                ./build.sh ipa $FLAGS
                 ls -la packages
                 
               env:
                 THEOS: ${{ github.workspace }}/theos
 
-            - name: Rename IPA to include version info
-              run: |
-                cd main/packages
-                mv "$(ls -t | head -n1)" "SCInsta_sideloaded_v${SCINSTA_VERSION}.ipa"
-
             - name: Pass package name to upload action
               id: package_name
               run: |
-                echo "package=$(ls -t main/packages |  head -n1)" >> "$GITHUB_OUTPUT"
+                # build.sh already produces Sparkle[_<flags>]_v<version>_IG_v<ig version>.ipa
+                IPA_PATH="$(ls -t main/packages/Sparkle_*_IG_v*.ipa | head -n1)"
+                echo "package=$(basename "$IPA_PATH")" >> "$GITHUB_OUTPUT"
+                echo "path=${IPA_PATH}" >> "$GITHUB_OUTPUT"
 
             - name: Upload Artifact
               if: ${{ inputs.upload_artifact }}
               uses: actions/upload-artifact@v4
               with:
-                name: SCInsta_sideloaded_v${{ steps.scinsta_version.outputs.version }}
-                path: ${{ github.workspace }}/main/packages/${{ steps.package_name.outputs.package }}
+                name: ${{ steps.package_name.outputs.package }}
+                path: ${{ github.workspace }}/main/${{ steps.package_name.outputs.path }}
                 if-no-files-found: error
 
             - name: Create Release
               uses: softprops/action-gh-release@v2.0.6
               with:
-                name: SCInsta_sideloaded_v${{ steps.scinsta_version.outputs.version }}
-                files: ${{ github.workspace }}/main/packages/SCInsta_sideloaded_v*.ipa
+                name: Sparkle v${{ steps.sparkle_version.outputs.version }}
+                files: ${{ github.workspace }}/main/packages/Sparkle_*_IG_v*.ipa
                 draft: true
 
             - name: Output Release URL
