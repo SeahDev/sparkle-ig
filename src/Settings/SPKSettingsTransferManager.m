@@ -1405,4 +1405,43 @@ static NSString *SPKTransferArchiveFilename(BOOL includeSettings, BOOL includeGa
                                                 ]];
 }
 
+- (void)resetConfigurationGroupFromController:(UIViewController *)controller
+                                        title:(NSString *)title
+                                      message:(NSString *)message
+                                  confirmTitle:(NSString *)confirmTitle
+                                         keys:(NSArray<NSString *> *)keys
+                                      onReset:(void (^)(void))onReset {
+    [SPKIGAlertPresenter presentAlertFromViewController:controller
+                                                  title:title
+                                                message:message
+                                                actions:@[
+                                                    [SPKIGAlertAction actionWithTitle:@"Cancel"
+                                                                                style:SPKIGAlertActionStyleCancel
+                                                                              handler:nil],
+                                                    [SPKIGAlertAction actionWithTitle:(confirmTitle.length ? confirmTitle : @"Reset")
+                                                                                style:SPKIGAlertActionStyleDestructive
+                                                                              handler:^{
+                                                                                  NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+                                                                                  // Remove both the base key and the active account's namespaced
+                                                                                  // override so the built-in default is restored for what the user
+                                                                                  // is looking at, while other accounts' overrides survive.
+                                                                                  for (NSString *key in keys) {
+                                                                                      [defaults removeObjectForKey:key];
+                                                                                      NSString *effectiveKey = SPKEffectivePreferenceKey(key);
+                                                                                      if (![effectiveKey isEqualToString:key])
+                                                                                          [defaults removeObjectForKey:effectiveKey];
+                                                                                  }
+                                                                                  SPKNotify(kSPKNotificationSettingsImport,
+                                                                                            @"Reset to default",
+                                                                                            @"These settings were restored to their default values.",
+                                                                                            @"circle_check_filled",
+                                                                                            SPKNotificationToneForIconResource(@"circle_check_filled"));
+                                                                                  dispatch_async(dispatch_get_main_queue(), ^{
+                                                                                      if (onReset)
+                                                                                          onReset();
+                                                                                  });
+                                                                              }],
+                                                ]];
+}
+
 @end
