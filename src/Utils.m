@@ -1301,6 +1301,11 @@ static id SPKPrefValueWithMasterOverlay(NSString *key) {
     return [self openURL:url];
 }
 
+// Returns a cleaned canonical Instagram URL, or `nil` when there is nothing to
+// sanitize (the input isn't an http/https Instagram URL). Callers MUST treat
+// nil as "leave the original untouched": `+URLWithString:` on iOS 17+ leniently
+// percent-encodes arbitrary text (captions, etc.) into a URL, so returning that
+// input back would mangle plain-text clipboard writes into %20/%E2%80%A2 noise.
 + (NSURL *)sanitizedInstagramShareURL:(NSURL *)url {
     if (!url)
         return nil;
@@ -1308,15 +1313,15 @@ static id SPKPrefValueWithMasterOverlay(NSString *key) {
         return nil;
 
     if (![url.scheme.lowercaseString isEqualToString:@"http"] && ![url.scheme.lowercaseString isEqualToString:@"https"]) {
-        return url;
+        return nil;
     }
     if (!SPKInstagramHostMatchesCanonical(url.host)) {
-        return url;
+        return nil;
     }
 
     NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
     if (!components) {
-        return url;
+        return nil;
     }
 
     NSArray<NSString *> *rawSegments = [components.path componentsSeparatedByString:@"/"];
