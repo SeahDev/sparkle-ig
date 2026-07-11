@@ -134,6 +134,7 @@ Per-feature control of the Sparkle notification pill and its haptics. See **Noti
 - **Hide Viewer List Plus Button**: Hides the Instagram Plus button in your story's viewer list.
 
 ### Other
+- **Search Viewer List**: Adds a search button to your own story's viewer list. Tapping it fetches the complete viewer list and opens a sheet where you can search by username or name and filter by follow relationship (All / Following / Not Following). A fully Sparkle-native alternative to the Instagram Plus viewer search.
 - **Hide Story Midcards** Removes the "Join a trending" / "Add Yours" promo cards from the stories tray. 
 - **Show Story Mentions**: Adds a mentions button listing mentioned users.
 - **Show Poll Vote Counts**: Shows vote counts next to poll options.

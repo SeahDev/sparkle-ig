@@ -263,6 +263,16 @@
 @interface IGTapButton : UIButton
 @end
 
+// Your-own-story viewer list (swipe up on your story). `_item` is the
+// id<IGStoryItemType> whose media pk we resolve to fetch the full viewer list.
+@interface IGStoryViewersListViewController : UIViewController
+@end
+
+// Collection section-header view used for the "Who viewed this story" label in
+// the viewer list — we pin the Sparkle viewer-search button to its trailing edge.
+@interface IGLabelSupplementaryView : UICollectionReusableView
+@end
+
 @interface IGLabel : UILabel
 @end
 

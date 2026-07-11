@@ -92,6 +92,7 @@ static NSDictionary *SPKFeatureDefaults(void) {
         @"stories_mentions_btn" : @(NO),
         @"stories_unlock_preview" : @(NO),
         @"stories_hide_ig_plus_button" : @(NO),
+        @"stories_search_viewer_list" : @(NO),
         @"feed_disable_appicon_gesture" : @(NO),
         @"reels_tap_control" : @"default",
         @"instants_disable_creation" : @(YES),
