@@ -634,6 +634,12 @@ static UIImage *SPKSettingsBreadcrumbChevronImage(void) {
         config.preferredSymbolConfigurationForImage = [UIImageSymbolConfiguration configurationWithPointSize:10.0 weight:UIImageSymbolWeightBold];
 
         menuButton.configuration = config;
+        // Must be set AFTER assigning the configuration: UIButtonConfiguration
+        // re-manages titleLabel and defaults it to multi-line, so a long selected
+        // value wraps onto a second line inside the accessory. Clamp it to one line
+        // (truncating) here so the value stays on the row like every other picker.
+        menuButton.titleLabel.numberOfLines = 1;
+        menuButton.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
         menuButton.tintColor = rowEnabled ? [SPKUtils SPKColor_InstagramSecondaryText] : [SPKUtils SPKColor_InstagramTertiaryText];
         if (!rowEnabled) {
             cellContentConfig.textProperties.color = [SPKUtils SPKColor_InstagramSecondaryText];

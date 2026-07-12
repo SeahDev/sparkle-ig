@@ -1,5 +1,6 @@
 #import "SPKFeedSettingsProvider.h"
 
+#import "../../Features/Feed/HeaderActionButton.h"
 #import "../../Shared/ActionButton/SPKActionButtonConfiguration.h"
 #import "../SPKTopicSettingsSupport.h"
 
@@ -17,6 +18,37 @@ static NSString *const kSPKFeedActionButtonEnabledKey = @"feed_action_btn";
             SPKActionButtonConfigurationNavigationSetting(SPKActionButtonSourceFeed, @"Feed", SPKActionButtonSupportedActionsForSource(SPKActionButtonSourceFeed), SPKActionButtonDefaultSectionsForSource(SPKActionButtonSourceFeed))
         ],
                         @"Choose what tapping the action button does. Long press opens the full menu."),
+        SPKTopicSection(@"Header Shortcut", @[
+            [SPKSetting switchCellWithTitle:@"Feed Header Button"
+                                       icon:SPKSettingsIcon(@"action")
+                                defaultsKey:kSPKHeaderButtonEnabledKey],
+            SPKFeedHeaderButtonDefaultActionNavigationSetting(),
+            [SPKSetting navigationCellWithTitle:@"Configure Destinations"
+                                       subtitle:@""
+                                           icon:SPKSettingsIcon(@"sliders")
+                                    navSections:@[
+                                        SPKTopicSection(@"Destinations", @[
+                                            [SPKSetting switchCellWithTitle:@"Gallery"
+                                                                       icon:SPKSettingsIcon(@"sparkle_gallery")
+                                                                defaultsKey:@"feed_header_button_dest_gallery"],
+                                            [SPKSetting switchCellWithTitle:@"Profile Analyzer"
+                                                                       icon:SPKSettingsIcon(@"profile_analyzer")
+                                                                defaultsKey:@"feed_header_button_dest_analyzer"],
+                                            [SPKSetting switchCellWithTitle:@"Deleted Messages"
+                                                                       icon:SPKSettingsIcon(@"channels")
+                                                                defaultsKey:@"feed_header_button_dest_deleted"],
+                                            [SPKSetting switchCellWithTitle:@"Downloads"
+                                                                       icon:SPKSettingsIcon(@"download")
+                                                                defaultsKey:@"feed_header_button_dest_downloads"],
+                                            [SPKSetting switchCellWithTitle:@"Sparkle Settings"
+                                                                       icon:SPKSettingsIcon(@"settings")
+                                                                defaultsKey:@"feed_header_button_dest_settings"],
+                                        ],
+                                                        @"Choose which sheets the header button can open. Enable one for a direct tap, or several to pick from the long-press menu.")
+                                    ]],
+        ],
+                        @"Adds a Sparkle button to the home feed header. "
+                        @"Tap opens the selected destination. Long press opens the menu of enabled destinations."),
         SPKTopicSection(@"Layout", @[
             SPKSettingApplySelectedMenuIcon([SPKSetting menuCellWithTitle:@"Main Feed" icon:SPKSettingsIcon(@"feed") menu:SPKMainFeedModeMenu()], SPKSettingsIcon(@"feed")),
             [SPKSetting switchCellWithTitle:@"Disable App Icon Gesture"

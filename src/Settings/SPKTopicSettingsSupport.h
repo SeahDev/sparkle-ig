@@ -30,5 +30,6 @@ UIMenu *SPKNotificationPillPositionMenu(void);
 UIMenu *SPKMediaVideoQualityMenu(void);
 UIMenu *SPKMediaPhotoQualityMenu(void);
 UIMenu *SPKGalleryShortcutTargetMenu(void);
+SPKSetting *SPKFeedHeaderButtonDefaultActionNavigationSetting(void);
 
 NS_ASSUME_NONNULL_END

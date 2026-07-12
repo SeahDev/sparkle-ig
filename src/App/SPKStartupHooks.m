@@ -6,6 +6,7 @@
 FOUNDATION_EXPORT void SPKInstallLiquidGlassHooksIfEnabled(void);
 FOUNDATION_EXPORT void SPKInstallProgressiveBlurHooksIfEnabled(void);
 FOUNDATION_EXPORT void SPKInstallFeedActionButtonHooksIfEnabled(void);
+FOUNDATION_EXPORT void SPKInstallHeaderActionButtonHooksIfEnabled(void);
 FOUNDATION_EXPORT void SPKInstallFollowingFeedHooksIfEnabled(void);
 FOUNDATION_EXPORT void SPKInstallReelsActionButtonHooksIfEnabled(void);
 FOUNDATION_EXPORT void SPKInstallStoriesActionButtonHooksIfEnabled(void);
@@ -137,6 +138,7 @@ void SPKInstallFeedSurfaceHooksIfNeeded(void) {
     SPKInstallTweakFeedHooksIfNeeded();
     SPKInstallFeedFilteringFeedHooksIfEnabled();
     SPKInstallFeedActionButtonHooksIfEnabled();
+    SPKInstallHeaderActionButtonHooksIfEnabled();
     SPKInstallBackgroundRefreshHooksIfEnabled();
     SPKInstallLikeConfirmHooksIfNeeded();
     SPKInstallDisableFeedAutoplayHooksIfEnabled();

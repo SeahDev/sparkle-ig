@@ -44,6 +44,7 @@ For the full list of features, check out [`FEATURES.md`](FEATURES.md).
 - **Action buttons everywhere**:
   - Fully customizable action-button menus on feed, reels, stories, DMs, Instants, and profiles.
   - Reorder, rename, re-icon, and set per-surface default tap actions.
+  - An optional feed-header shortcut button for one-tap access to Gallery, Profile Analyzer, Deleted Messages, Downloads or Settings.
 - **Keep deleted messages**:
   - Preserve unsent DMs, log removed reactions, and recover view-once media, with a browsable log.
 - **Profile Analyzer**:
