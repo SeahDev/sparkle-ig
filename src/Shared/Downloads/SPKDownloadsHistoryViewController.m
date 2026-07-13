@@ -372,8 +372,8 @@ typedef NS_ENUM(NSUInteger, SPKDownloadsHistoryRowKind) {
     self.chipBar.translatesAutoresizingMaskIntoConstraints = NO;
     self.chipBar.delegate = self;
     [self.chipBar setItems:@[ @"All", @"Active", @"Queued", @"Failed", @"Recent" ]
-                   symbols:@[ @"download", @"play_filled", @"clock", @"error", @"circle_check" ]
-           selectedSymbols:@[ @"download", @"play_filled", @"clock", @"error_filled", @"circle_check_filled" ]];
+                   symbols:@[ @"download", @"play", @"clock", @"error", @"circle_check" ]
+           selectedSymbols:@[ @"download_filled", @"play_filled", @"clock_filled", @"error_filled", @"circle_check_filled" ]];
     self.chipBar.selectedIndex = 0;
     [self.view addSubview:self.chipBar];
 

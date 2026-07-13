@@ -142,6 +142,10 @@ static NSDictionary *SPKSettingsLockSection(void) {
                                      }],
         ],
                         @"1. Quick Settings Access opens settings when long pressing the Home tab or the next visible tab if the Home tab is hidden.\n"
+                        @"2. Play a haptic tap when the settings shortcut gesture fires.\n"
+                        @"3. Open Sparkle settings automatically every time Instagram launches.\n"
+                        @"4. Suppress every Sparkle feature hook, leaving only the shortcut to reach this screen. Use to isolate crashes.\n"
+                        @"5. Replay the first-run introduction sheet at any time.\n"
                         @"6. Reset Safe Startup Mode clears failed-launch counters and temporary hook suppression."),
         SPKSettingsLockSection(),
     ]];

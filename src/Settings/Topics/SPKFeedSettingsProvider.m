@@ -75,7 +75,13 @@ static NSString *const kSPKFeedActionButtonEnabledKey = @"feed_action_btn";
                             requiresRestart:YES]
         ],
                         @"1. Force Instagram's chronological Following feed instead of the algorithmic For You feed. Title stays \"For you\".\n"
-                        @"2. Stop the feed header logo long-press from opening Instagram's app icon picker. Sparkle has its own in Settings."),
+                        @"2. Stop the feed header logo long-press from opening Instagram's app icon picker. Sparkle has its own in Settings.\n"
+                        @"3. Hide the horizontal stories tray at the top of the feed.\n"
+                        @"4. Hide the entire home feed, leaving only the header.\n"
+                        @"5. Remove algorithmically suggested posts from the feed.\n"
+                        @"6. Remove suggested reels from the feed.\n"
+                        @"7. Remove suggested Threads posts from the feed.\n"
+                        @"8. Hide the repost button on feed posts."),
         SPKTopicSection(@"Metrics", @[
             [SPKSetting switchCellWithTitle:@"Hide Like Count"
                                        icon:SPKSettingsIcon(@"heart")
