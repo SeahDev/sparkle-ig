@@ -60,6 +60,7 @@ For the full list of features, check out [`FEATURES.md`](FEATURES.md).
   - Optional "are you sure?" guards for accidental likes, follows, reposts, calls, comments, and more.
 - **Liquid Glass (iOS 26+)**:
   - Native Liquid Glass integration across Sparkle's own UI, plus an option to force-enable Instagram's.
+  - On iOS 18 and lower, a **Pill-Shaped Tab Bar** toggle brings the floating pill tab bar (shape only; the glass material stays iOS 26+).
 
 ## Installation
 

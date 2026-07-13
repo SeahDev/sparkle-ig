@@ -114,13 +114,18 @@ void SPKInstallLaunchCriticalHooks(void) {
         SPKInstallEssentialAccessHooks();
         return;
     }
+    // Progressive blur relies on UIScrollEdgeEffect (iOS 26+ only).
     if (SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(@"26.0")) {
         if ([SPKUtils getBoolPref:@"interface_progressive_blur"]) {
             SPKInstallProgressiveBlurHooksIfEnabled();
         }
-        if ([SPKUtils spk_isLiquidGlassEffectivelyEnabled]) {
-            SPKInstallLiquidGlassHooksIfEnabled();
-        }
+    }
+    // Liquid Glass surface hooks install on any iOS: the tab bar experiment
+    // gates reshape the bar into the floating pill even pre-26 (only the glass
+    // material is unavailable). The ObjC button hooks inside self-skip when
+    // their classes are absent, so this is safe on older systems.
+    if ([SPKUtils spk_isLiquidGlassEffectivelyEnabled]) {
+        SPKInstallLiquidGlassHooksIfEnabled();
     }
     SPKInstallTweakLaunchCriticalHooks();
     SPKInstallFollowingFeedHooksIfEnabled();
