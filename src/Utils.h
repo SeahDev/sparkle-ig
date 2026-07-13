@@ -87,6 +87,10 @@ FOUNDATION_EXPORT Class _Nullable SPKResolveIGClass(NSString *qualified, NSStrin
 + (nullable NSString *)pkFromIGUser:(nullable id)user;
 // Current logged-in user's PK via the active session, or nil when unavailable.
 + (nullable NSString *)currentUserPK;
+// Current logged-in user's identity (pk / username / full_name / profile_pic_url)
+// read live from the active session's IGUser, or nil when unavailable. Values are
+// only present when resolvable; useful for painting identity before any network fetch.
++ (nullable NSDictionary<NSString *, NSString *> *)currentUserIdentity;
 
 /// IGDSLauncherConfig hooks: when Liquid Glass is on, returns YES; otherwise returns `fallback` (stock).
 + (_Bool)spk_liquidGlassLauncherPrefKey:(NSString *)key orig:(_Bool)fallback;

@@ -356,7 +356,7 @@ uploaded. Accounts with more than 13,000 total connections (followers + followin
 can't be analyzed because a single scan would hit Instagram's rate limits.
 
 ### Analyzer
-- **Open Profile Analyzer**: Dashboard with your profile header (avatar, posts/followers/following), a Run/Re-run Analysis button, and the insight categories below.
+- **Open Profile Analyzer**: Dashboard with your profile header (avatar, @username, and posts/followers/following — your identity shows even before the first scan), a Scan Now/Again button that intermittently surfaces when you last analyzed, and the insight categories below.
 - **Insights** (always available after a scan):
   - **Mutual Followers**: accounts you follow that also follow you.
   - **Not Following You Back**: accounts you follow that don't follow you.
@@ -369,7 +369,7 @@ can't be analyzed because a single scan would hit Instagram's rate limits.
 - Each list supports search, sorting (A–Z / Z–A / default), tapping a row to open the profile, and inline **Follow / Unfollow** with live follow-state resolution.
 
 ### Tracking
-- **Track Visited Profiles**: Records the profiles you open so you can review who you visit most (with first/last-seen and a visit count). Most-recent, most-visited, and alphabetical sorts; swipe to remove an entry. Stored locally.
+- **Track Visited Profiles**: Records the profiles you open so you can review who you visit most (with first/last-seen and a visit count). Most-recent, most-visited, and alphabetical sorts; swipe to remove an entry, or clear the whole history from the list's **More** menu. Stored locally.
 
 ### Maintenance
 - **Reset Profile Analyzer Data**: Deletes all stored snapshots, the change history, and visited-profile history.

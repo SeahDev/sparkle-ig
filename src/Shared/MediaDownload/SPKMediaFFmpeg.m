@@ -1399,8 +1399,8 @@ static void SPKFFmpegRunMergeAttempts(NSArray<NSDictionary<NSString *, id> *> *a
 
         [icon.topAnchor constraintEqualToAnchor:content.topAnchor],
         [icon.centerXAnchor constraintEqualToAnchor:content.centerXAnchor],
-        [icon.widthAnchor constraintEqualToConstant:72],
-        [icon.heightAnchor constraintEqualToConstant:72],
+        [icon.widthAnchor constraintEqualToConstant:96],
+        [icon.heightAnchor constraintEqualToConstant:96],
 
         [title.topAnchor constraintEqualToAnchor:icon.bottomAnchor constant:18],
         [title.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],

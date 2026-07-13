@@ -275,8 +275,8 @@ typedef NS_ENUM(NSInteger, SPKUserListSortMode) {
 
         [self.emptyStateIcon.topAnchor constraintEqualToAnchor:self.emptyStateView.topAnchor],
         [self.emptyStateIcon.centerXAnchor constraintEqualToAnchor:self.emptyStateView.centerXAnchor],
-        [self.emptyStateIcon.widthAnchor constraintEqualToConstant:72.0],
-        [self.emptyStateIcon.heightAnchor constraintEqualToConstant:72.0],
+        [self.emptyStateIcon.widthAnchor constraintEqualToConstant:96.0],
+        [self.emptyStateIcon.heightAnchor constraintEqualToConstant:96.0],
 
         [self.emptyStateTitle.topAnchor constraintEqualToAnchor:self.emptyStateIcon.bottomAnchor constant:18.0],
         [self.emptyStateTitle.leadingAnchor constraintEqualToAnchor:self.emptyStateView.leadingAnchor],

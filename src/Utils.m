@@ -867,6 +867,40 @@ static id SPKPrefValueWithMasterOverlay(NSString *key) {
     }
 }
 
++ (NSDictionary<NSString *, NSString *> *)currentUserIdentity {
+    id session = [self activeUserSession];
+    if (!session)
+        return nil;
+    id user = nil;
+    @try {
+        user = [session valueForKey:@"user"];
+    } @catch (__unused NSException *e) {
+    }
+    if (!user)
+        return nil;
+
+    NSMutableDictionary<NSString *, NSString *> *info = [NSMutableDictionary dictionary];
+    NSString *pk = [self pkFromIGUser:user];
+    if (pk.length)
+        info[@"pk"] = pk;
+
+    id username = SPKObjectForSelector(user, @"username");
+    if ([username isKindOfClass:[NSString class]] && [(NSString *)username length])
+        info[@"username"] = username;
+
+    id fullName = SPKObjectForSelector(user, @"fullName");
+    if (![fullName isKindOfClass:[NSString class]] || ![(NSString *)fullName length])
+        fullName = SPKObjectForSelector(user, @"full_name");
+    if ([fullName isKindOfClass:[NSString class]] && [(NSString *)fullName length])
+        info[@"full_name"] = fullName;
+
+    NSURL *picURL = [self getBestProfilePictureURLForUser:user];
+    if (picURL.absoluteString.length)
+        info[@"profile_pic_url"] = picURL.absoluteString;
+
+    return info.count ? info : nil;
+}
+
 + (void)cleanCache {
     NSFileManager *fileManager = [NSFileManager defaultManager];
     NSMutableArray<NSError *> *deletionErrors = [NSMutableArray array];

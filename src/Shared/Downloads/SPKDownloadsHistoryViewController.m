@@ -577,8 +577,8 @@ typedef NS_ENUM(NSUInteger, SPKDownloadsHistoryRowKind) {
 
         [self.emptyStateIcon.topAnchor constraintEqualToAnchor:self.emptyStateView.topAnchor],
         [self.emptyStateIcon.centerXAnchor constraintEqualToAnchor:self.emptyStateView.centerXAnchor],
-        [self.emptyStateIcon.widthAnchor constraintEqualToConstant:72],
-        [self.emptyStateIcon.heightAnchor constraintEqualToConstant:72],
+        [self.emptyStateIcon.widthAnchor constraintEqualToConstant:96],
+        [self.emptyStateIcon.heightAnchor constraintEqualToConstant:96],
 
         [self.emptyStateTitle.topAnchor constraintEqualToAnchor:self.emptyStateIcon.bottomAnchor
                                                        constant:18],
